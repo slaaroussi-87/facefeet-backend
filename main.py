@@ -9,6 +9,7 @@ from routes.categories import get_router as get_categories_router
 from routes.produits import get_router as get_produits_router
 from routes.ventes import get_router as get_ventes_router
 from routes.export import get_router as get_export_router
+from routes.stock import get_router as get_stock_router
 
 load_dotenv()
 
@@ -31,6 +32,7 @@ app.include_router(get_categories_router(supabase), prefix="/categories", tags=[
 app.include_router(get_produits_router(supabase), prefix="/produits", tags=["Produits"])
 app.include_router(get_ventes_router(supabase), prefix="/ventes", tags=["Ventes"])
 app.include_router(get_export_router(supabase), prefix="/export", tags=["Export"])
+app.include_router(get_stock_router(supabase), prefix="/stock", tags=["Stock"])
 
 @app.get("/")
 def root():

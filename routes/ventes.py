@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from supabase import Client
 from datetime import datetime
 
@@ -16,12 +16,26 @@ def get_router(supabase: Client):
         lignes = data.get("lignes", [])
         remise_pourcent = data.get("remise_pourcent", 0)
 
+        # ── 1. Validation des stocks avant toute écriture ─────────────────────
+        produits_cache = {}
+        for ligne in lignes:
+            prod = supabase.table("produits").select("id, nom, stock, seuil_alerte").eq("id", ligne["produit_id"]).execute()
+            produit = prod.data[0]
+            produits_cache[ligne["produit_id"]] = produit
+            stock_actuel = produit.get("stock") or 0
+            if stock_actuel < ligne["quantite"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Stock insuffisant pour '{produit['nom']}' : "
+                           f"{stock_actuel} disponible(s), {ligne['quantite']} demandé(s)"
+                )
+
+        # ── 2. Création de la vente ────────────────────────────────────────────
         total_brut = sum(l["prix_unitaire"] * l["quantite"] for l in lignes)
         total_remise_val = total_brut * remise_pourcent / 100
         total_net = total_brut - total_remise_val
 
         now = datetime.now()
-
         vente = {
             "date": now.strftime("%Y-%m-%d"),
             "heure": now.strftime("%H:%M:%S"),
@@ -32,9 +46,11 @@ def get_router(supabase: Client):
         res = supabase.table("ventes").insert(vente).execute()
         vente_id = res.data[0]["id"]
 
+        # ── 3. Insertion des lignes + décrémentation du stock ─────────────────
+        warnings = []
         for ligne in lignes:
-            prod = supabase.table("produits").select("*").eq("id", ligne["produit_id"]).execute()
-            produit = prod.data[0]
+            prod_info = supabase.table("produits").select("*").eq("id", ligne["produit_id"]).execute()
+            produit = prod_info.data[0]
 
             prix_vente = ligne["prix_unitaire"]
             quantite = ligne["quantite"]
@@ -59,7 +75,20 @@ def get_router(supabase: Client):
             }
             supabase.table("lignes_vente").insert(ligne_data).execute()
 
-        return {"message": "Vente créée", "vente_id": vente_id}
+            # Décrémentation du stock
+            new_stock = (produit.get("stock") or 0) - quantite
+            supabase.table("produits").update({"stock": new_stock}).eq("id", produit["id"]).execute()
+
+            # Warning si sous le seuil après vente
+            seuil = produit.get("seuil_alerte") or 5
+            if new_stock <= seuil:
+                warnings.append({
+                    "produit": produit["nom"],
+                    "stock_restant": new_stock,
+                    "seuil_alerte": seuil
+                })
+
+        return {"message": "Vente créée", "vente_id": vente_id, "warnings": warnings}
 
     @router.delete("/{id}")
     def delete_vente(id: str):
