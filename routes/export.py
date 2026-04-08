@@ -1,15 +1,15 @@
 from fastapi import APIRouter
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from supabase import Client
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
-from datetime import date
+import io
 
 router = APIRouter()
 
 def get_router(supabase: Client):
 
-    def generer_excel(lignes, titre, filename):
+    def generer_excel(lignes, titre):
         wb = Workbook()
         ws = wb.active
         ws.title = titre[:31].replace("/", "-")
@@ -37,7 +37,7 @@ def get_router(supabase: Client):
         ws['A1'].font = titre_font
         ws['A1'].alignment = Alignment(horizontal="center")
 
-        headers = ['#', 'Article', 'Catégorie', 'Date', 'Qté', 'Achat UV', 'Vente UV', 'Remise %', 'Remise DH', 'Prix net', 'CA (DH)', 'Marge (DH)']
+        headers = ['#', 'Article', 'Catégorie', 'Date', 'Qté', 'Achat UV', 'Vente UV', 'Remise %', 'Remise DH', 'Prix net UV', 'CA (DH)', 'Marge (DH)']
         for col, h in enumerate(headers, 1):
             cell = ws.cell(row=3, column=col, value=h)
             cell.font = header_font
@@ -60,7 +60,8 @@ def get_router(supabase: Client):
             prix_vente = float(l.get("prix_vente", 0))
             remise_pct = float(l.get("remise", 0))
             remise_dh = float(l.get("montant_remise", 0))
-            prix_net = float(l.get("net", 0))
+            ca_ligne = float(l.get("net", 0))                        # CA total de la ligne
+            prix_net_unitaire = prix_vente * (1 - remise_pct / 100)  # prix net par unité
             marge = float(l.get("marge", 0))
 
             ws.cell(row=row, column=1, value=i)
@@ -72,11 +73,11 @@ def get_router(supabase: Client):
             ws.cell(row=row, column=7, value=prix_vente)
             ws.cell(row=row, column=8, value=remise_pct)
             ws.cell(row=row, column=9, value=remise_dh)
-            ws.cell(row=row, column=10, value=prix_net)
-            ws.cell(row=row, column=11, value=prix_net)
+            ws.cell(row=row, column=10, value=prix_net_unitaire)  # Prix net unitaire
+            ws.cell(row=row, column=11, value=ca_ligne)           # CA total de la ligne
             ws.cell(row=row, column=12, value=marge)
 
-            total_ca += prix_net
+            total_ca += ca_ligne
             total_cout += prix_achat * qte
             total_remise += remise_dh
             total_marge += marge
@@ -105,8 +106,11 @@ def get_router(supabase: Client):
         ws.cell(row=net_row, column=1, value="RÉSULTAT NET").font = Font(bold=True, size=12, color="2d2d2d")
         ws.cell(row=net_row, column=5, value=total_marge).font = Font(bold=True, size=12, color="27ae60")
 
-        wb.save(filename)
-        return filename
+        # Générer en mémoire — pas d'écriture sur disque
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+        return buffer
 
     @router.get("/jour/{date_jour}")
     def export_journee(date_jour: str):
@@ -119,19 +123,20 @@ def get_router(supabase: Client):
 
         date_formatted = f"{date_jour[8:10]}-{date_jour[5:7]}-{date_jour[0:4]}"
         titre = f"VENTES DU {date_jour[8:10]}/{date_jour[5:7]}/{date_jour[0:4]}"
-        filename = f"export_jour_{date_jour}.xlsx"
+        buffer = generer_excel(lignes, titre)
 
-        generer_excel(lignes, titre, filename)
-
-        return FileResponse(
-            filename,
-            filename=f"Ventes_{date_formatted}.xlsx",
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        return StreamingResponse(
+            buffer,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="Ventes_{date_formatted}.xlsx"'}
         )
 
     @router.get("/mois/{annee_mois}")
     def export_mois(annee_mois: str):
-        ventes = supabase.table("ventes").select("*, lignes_vente(*)").gte("date", f"{annee_mois}-01").lte("date", f"{annee_mois}-31").execute()
+        ventes = supabase.table("ventes").select("*, lignes_vente(*)") \
+            .gte("date", f"{annee_mois}-01") \
+            .lte("date", f"{annee_mois}-31") \
+            .execute()
 
         lignes = []
         for v in ventes.data:
@@ -140,14 +145,12 @@ def get_router(supabase: Client):
 
         mois_formatted = f"{annee_mois[5:7]}-{annee_mois[0:4]}"
         titre = f"CUMUL VENTES — MOIS {annee_mois[5:7]}/{annee_mois[0:4]}"
-        filename = f"export_mois_{annee_mois}.xlsx"
+        buffer = generer_excel(lignes, titre)
 
-        generer_excel(lignes, titre, filename)
-
-        return FileResponse(
-            filename,
-            filename=f"Ventes_Mois_{mois_formatted}.xlsx",
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        return StreamingResponse(
+            buffer,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="Ventes_Mois_{mois_formatted}.xlsx"'}
         )
 
     return router

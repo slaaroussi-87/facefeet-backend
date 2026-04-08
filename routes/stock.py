@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 from supabase import Client
 from datetime import datetime
+from models import StockUpdate, MouvementCreate
 
 router = APIRouter()
 
@@ -34,39 +35,38 @@ def get_router(supabase: Client):
             .select("*, produits(nom)")
             .order("date", desc=True)
             .order("heure", desc=True)
-            .limit(50)
+            .limit(100)
             .execute()
         )
         return res.data
 
     @router.put("/{produit_id}")
-    def update_stock(produit_id: str, data: dict):
-        payload = {"stock": data["stock"]}
-        if "seuil_alerte" in data and data["seuil_alerte"] is not None:
-            payload["seuil_alerte"] = data["seuil_alerte"]
+    def update_stock(produit_id: str, data: StockUpdate):
+        payload = {"stock": data.stock}
+        if data.seuil_alerte is not None:
+            payload["seuil_alerte"] = data.seuil_alerte
         res = supabase.table("produits").update(payload).eq("id", produit_id).execute()
         return res.data
 
     @router.post("/mouvement")
-    def create_mouvement(data: dict):
+    def create_mouvement(data: MouvementCreate):
         now = datetime.now()
 
-        prod = supabase.table("produits").select("stock").eq("id", data["produit_id"]).execute()
+        prod = supabase.table("produits").select("stock").eq("id", data.produit_id).execute()
         current_stock = prod.data[0].get("stock") or 0
-        if data["type"] == "entree":
-            new_stock = current_stock + data["quantite"]
+        if data.type == "entree":
+            new_stock = current_stock + data.quantite
         else:
-            new_stock = max(0, current_stock - data["quantite"])
+            new_stock = max(0, current_stock - data.quantite)
 
-        supabase.table("produits").update({"stock": new_stock}).eq("id", data["produit_id"]).execute()
+        supabase.table("produits").update({"stock": new_stock}).eq("id", data.produit_id).execute()
 
-        # Historique optionnel — ignoré si la table n'existe pas encore
         try:
             mouvement = {
-                "produit_id": data["produit_id"],
-                "type": data["type"],
-                "quantite": data["quantite"],
-                "motif": data.get("motif", ""),
+                "produit_id": data.produit_id,
+                "type": data.type,
+                "quantite": data.quantite,
+                "motif": data.motif or "",
                 "date": now.strftime("%Y-%m-%d"),
                 "heure": now.strftime("%H:%M:%S"),
             }

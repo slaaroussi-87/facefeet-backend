@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from supabase import create_client, Client
 import os
@@ -40,4 +41,8 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "supabase": "connecté"}
+    try:
+        supabase.table("categories").select("id").limit(1).execute()
+        return {"status": "ok", "supabase": "connecté"}
+    except Exception as e:
+        return JSONResponse(status_code=503, content={"status": "error", "supabase": str(e)})
